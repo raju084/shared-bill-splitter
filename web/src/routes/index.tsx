@@ -132,6 +132,8 @@ function App() {
   const [newBillTitle, setNewBillTitle] = useState('')
   const [newBillAmount, setNewBillAmount] = useState('')
   const [formError, setFormError] = useState('')
+  const [memberError, setMemberError] = useState('')
+  const [billError, setBillError] = useState('')
   const [loadingHome, setLoadingHome] = useState(false)
 
   const [state, dispatch] = useReducer(reducer, {
@@ -142,27 +144,6 @@ function App() {
     paying: {},
   })
 
-  const [savedHomes, setSavedHomes] = useState<{ id: string; name: string }[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem('recent_homes') || '[]')
-    } catch {
-      return []
-    }
-  })
-
-  const saveHomeToHistory = (id: string, name: string) => {
-    setSavedHomes((prev) => {
-      const filtered = prev.filter((h) => h.id !== id)
-      const updated = [{ id, name }, ...filtered].slice(0, 5)
-      try {
-        localStorage.setItem('recent_homes', JSON.stringify(updated))
-      } catch {
-        // ignore
-      }
-      return updated
-    })
-  }
-
   // ---- create home ----
   const handleCreateHome = async () => {
     if (!newHomeName.trim()) {
@@ -171,63 +152,20 @@ function App() {
     }
     setFormError('')
     setLoadingHome(true)
-    const name = newHomeName.trim()
     const res = await apiFetch<{ id: string; name: string }>('POST', '/api/homes', {
-      body: { name },
+      body: { name: newHomeName.trim() },
     })
     setLoadingHome(false)
     if (!res.ok) {
       setFormError(res.message)
       return
     }
-    saveHomeToHistory(res.data.id, name)
     setHomeIdInput(res.data.id)
     dispatch({ type: 'SET_BILLS', bills: [] })
     dispatch({ type: 'SET_MEMBERS', members: [] })
     dispatch({ type: 'SET_BALANCES', balances: [] })
     await handleLoadHome(res.data.id)
     setNewHomeName('')
-  }
-
-  // ---- create demo home ----
-  const handleCreateDemo = async () => {
-    setFormError('')
-    setLoadingHome(true)
-    const homeRes = await apiFetch<{ id: string; name: string }>('POST', '/api/homes', {
-      body: { name: 'Demo Flat 4B' },
-    })
-    if (!homeRes.ok) {
-      setLoadingHome(false)
-      setFormError(homeRes.message)
-      return
-    }
-    const hid = homeRes.data.id
-    saveHomeToHistory(hid, 'Demo Flat 4B')
-
-    // Add members: Asha, Ben, Chitra
-    const membersList: Member[] = []
-    for (const name of ['Asha', 'Ben', 'Chitra']) {
-      const mRes = await apiFetch<Member>('POST', `/api/homes/${hid}/members`, {
-        body: { name },
-      })
-      if (mRes.ok) membersList.push(mRes.data)
-    }
-
-    // Add a bill: Wi-Fi ($35.00 = 3500 cents -> 1167, 1167, 1166)
-    const billsList: Bill[] = []
-    const billRes = await apiFetch<Bill>('POST', `/api/homes/${hid}/bills`, {
-      body: { title: 'Wi-Fi & Utilities', totalCents: 3500 },
-    })
-    if (billRes.ok) billsList.push(billRes.data)
-
-    const balRes = await apiFetch<{ balances: Balance[] }>('GET', `/api/homes/${hid}/balances`)
-
-    setLoadingHome(false)
-    setHomeIdInput(hid)
-    setActiveHome(hid)
-    dispatch({ type: 'SET_MEMBERS', members: membersList })
-    dispatch({ type: 'SET_BILLS', bills: billsList })
-    if (balRes.ok) dispatch({ type: 'SET_BALANCES', balances: balRes.data.balances })
   }
 
   // ---- load home ----
@@ -254,15 +192,15 @@ function App() {
   // ---- add member ----
   const handleAddMember = async () => {
     if (!newMemberName.trim()) {
-      setFormError('Member name is required')
+      setMemberError('Member name is required')
       return
     }
-    setFormError('')
+    setMemberError('')
     const res = await apiFetch<Member>('POST', `/api/homes/${activeHomeState}/members`, {
       body: { name: newMemberName.trim() },
     })
     if (!res.ok) {
-      setFormError(res.message)
+      setMemberError(res.message)
       return
     }
     dispatch({ type: 'SET_MEMBERS', members: [...state.members, res.data] })
@@ -272,25 +210,30 @@ function App() {
       `/api/homes/${activeHomeState}/balances`,
     )
     if (bal.ok) dispatch({ type: 'SET_BALANCES', balances: bal.data.balances })
+    setBillError('')
   }
 
   // ---- create bill ----
   const handleCreateBill = async () => {
+    if (state.balances.length === 0) {
+      setBillError('Please add at least one member above before creating a bill.')
+      return
+    }
     const totalCents = Math.round(Number(newBillAmount) * 100)
     if (!newBillTitle.trim() || !newBillAmount) {
-      setFormError('Title and amount are required')
+      setBillError('Title and amount are required')
       return
     }
     if (!Number.isFinite(totalCents) || totalCents <= 0) {
-      setFormError('Amount must be a positive number')
+      setBillError('Amount must be a positive number')
       return
     }
-    setFormError('')
+    setBillError('')
     const res = await apiFetch<Bill>('POST', `/api/homes/${activeHomeState}/bills`, {
       body: { title: newBillTitle.trim(), totalCents },
     })
     if (!res.ok) {
-      setFormError(res.message)
+      setBillError(res.message)
       return
     }
     dispatch({ type: 'SET_BILLS', bills: [...state.bills, res.data] })
@@ -378,42 +321,6 @@ function App() {
                 {loadingHome ? '…' : 'Load Home'}
               </button>
             </div>
-
-            {savedHomes.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <span style={styles.meta}>Recent homes: </span>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
-                  {savedHomes.map((h) => (
-                    <button
-                      key={h.id}
-                      type="button"
-                      style={{
-                        padding: '3px 8px',
-                        background: '#e2e8f0',
-                        border: '1px solid #cbd5e1',
-                        borderRadius: 4,
-                        fontSize: 12,
-                        cursor: 'pointer',
-                      }}
-                      onClick={() => handleLoadHome(h.id)}
-                    >
-                      {h.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div style={{ marginTop: 16, borderTop: '1px dashed #e2e8f0', paddingTop: 12 }}>
-              <button
-                type="button"
-                style={{ ...styles.btn, background: '#8b5cf6', width: '100%' }}
-                onClick={handleCreateDemo}
-                disabled={loadingHome}
-              >
-                ✨ Quick Start: Create Demo Home (3 members + 1 bill)
-              </button>
-            </div>
           </>
         ) : (
           <>
@@ -454,6 +361,7 @@ function App() {
                 Add
               </button>
             </div>
+            {memberError && <p style={styles.error}>{memberError}</p>}
           </section>
 
           {/* ---- Balances ---- */}
@@ -492,6 +400,21 @@ function App() {
           {/* ---- Add Bill ---- */}
           <section style={styles.card}>
             <h2 style={styles.h2}>Add Bill</h2>
+            {state.balances.length === 0 && (
+              <div
+                style={{
+                  background: '#fef3c7',
+                  color: '#92400e',
+                  padding: '8px 12px',
+                  borderRadius: 6,
+                  fontSize: 13,
+                  marginBottom: 12,
+                }}
+              >
+                ⚠️ Add at least one member above before creating a bill (bills are split between
+                members).
+              </div>
+            )}
             <div style={styles.row}>
               <input
                 style={styles.input}
@@ -508,10 +431,20 @@ function App() {
                 value={newBillAmount}
                 onChange={(e) => setNewBillAmount(e.target.value)}
               />
-              <button type="button" style={styles.btn} onClick={handleCreateBill}>
+              <button
+                type="button"
+                style={{
+                  ...styles.btn,
+                  opacity: state.balances.length === 0 ? 0.6 : 1,
+                  cursor: state.balances.length === 0 ? 'not-allowed' : 'pointer',
+                }}
+                onClick={handleCreateBill}
+                disabled={state.balances.length === 0}
+              >
                 Add Bill
               </button>
             </div>
+            {billError && <p style={styles.error}>{billError}</p>}
           </section>
 
           {/* ---- Bills ---- */}
