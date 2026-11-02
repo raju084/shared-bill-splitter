@@ -1,6 +1,28 @@
 import { type Context, Hono } from 'hono'
 
-const app = new Hono<{ Bindings: Env }>()
+type Bindings = {
+  DB: D1Database
+}
+
+type ShareRow = {
+  id: string
+  member_id: string
+  amount_cents: number
+  paid_at: string | null
+  idempotency_key: string | null
+}
+
+type MemberRow = {
+  id: string
+}
+
+type BalanceRow = {
+  memberId: string
+  name: string
+  outstandingCents: number
+}
+
+const app = new Hono<{ Bindings: Bindings }>()
 
 // Ensure all unexpected errors return standard JSON: { "error": "message" }
 app.onError((err, c) => {
@@ -72,11 +94,13 @@ app.post('/api/homes/:homeId/bills', async (c) => {
   }
 
   // Fetch members in the order they were added
-  const { results: members } = await c.env.DB.prepare(
+  const memberResult = (await c.env.DB.prepare(
     'SELECT id FROM members WHERE home_id = ? ORDER BY created_at ASC, rowid ASC',
   )
     .bind(homeId)
-    .all<{ id: string }>()
+    .all()) as { results: MemberRow[] }
+
+  const members = memberResult.results
 
   if (members.length === 0) {
     return c.json({ error: 'home has no members' }, 422)
@@ -127,17 +151,11 @@ app.post('/api/bills/:billId/shares/:shareId/pay', async (c) => {
   if (!bill) return c.json({ error: 'bill not found' }, 404)
 
   // Fetch share (must belong to this bill)
-  const share = await c.env.DB.prepare(
+  const share = (await c.env.DB.prepare(
     'SELECT id, member_id, amount_cents, paid_at, idempotency_key FROM shares WHERE id = ? AND bill_id = ?',
   )
     .bind(shareId, billId)
-    .first<{
-      id: string
-      member_id: string
-      amount_cents: number
-      paid_at: string | null
-      idempotency_key: string | null
-    }>()
+    .first()) as ShareRow | null
 
   if (!share) return c.json({ error: 'share not found' }, 404)
 
@@ -164,17 +182,11 @@ app.post('/api/bills/:billId/shares/:shareId/pay', async (c) => {
 
   if (result.meta.changes === 0) {
     // Another concurrent request updated it first — check idempotency
-    const updated = await c.env.DB.prepare(
+    const updated = (await c.env.DB.prepare(
       'SELECT id, member_id, amount_cents, paid_at, idempotency_key FROM shares WHERE id = ?',
     )
       .bind(shareId)
-      .first<{
-        id: string
-        member_id: string
-        amount_cents: number
-        paid_at: string | null
-        idempotency_key: string | null
-      }>()
+      .first()) as ShareRow | null
 
     if (updated && updated.idempotency_key === idempotencyKey) {
       return c.json({
@@ -203,7 +215,7 @@ app.get('/api/homes/:homeId/balances', async (c) => {
   const home = await c.env.DB.prepare('SELECT id FROM homes WHERE id = ?').bind(homeId).first()
   if (!home) return c.json({ error: 'home not found' }, 404)
 
-  const { results } = await c.env.DB.prepare(
+  const balanceResult = (await c.env.DB.prepare(
     `SELECT
        m.id          AS memberId,
        m.name        AS name,
@@ -216,9 +228,9 @@ app.get('/api/homes/:homeId/balances', async (c) => {
      ORDER BY m.created_at ASC, m.rowid ASC`,
   )
     .bind(homeId, homeId)
-    .all<{ memberId: string; name: string; outstandingCents: number }>()
+    .all()) as { results: BalanceRow[] }
 
-  return c.json({ balances: results })
+  return c.json({ balances: balanceResult.results })
 })
 
 export default app
