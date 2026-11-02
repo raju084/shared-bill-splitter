@@ -142,6 +142,27 @@ function App() {
     paying: {},
   })
 
+  const [savedHomes, setSavedHomes] = useState<{ id: string; name: string }[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('recent_homes') || '[]')
+    } catch {
+      return []
+    }
+  })
+
+  const saveHomeToHistory = (id: string, name: string) => {
+    setSavedHomes((prev) => {
+      const filtered = prev.filter((h) => h.id !== id)
+      const updated = [{ id, name }, ...filtered].slice(0, 5)
+      try {
+        localStorage.setItem('recent_homes', JSON.stringify(updated))
+      } catch {
+        // ignore
+      }
+      return updated
+    })
+  }
+
   // ---- create home ----
   const handleCreateHome = async () => {
     if (!newHomeName.trim()) {
@@ -150,20 +171,63 @@ function App() {
     }
     setFormError('')
     setLoadingHome(true)
+    const name = newHomeName.trim()
     const res = await apiFetch<{ id: string; name: string }>('POST', '/api/homes', {
-      body: { name: newHomeName.trim() },
+      body: { name },
     })
     setLoadingHome(false)
     if (!res.ok) {
       setFormError(res.message)
       return
     }
+    saveHomeToHistory(res.data.id, name)
     setHomeIdInput(res.data.id)
     dispatch({ type: 'SET_BILLS', bills: [] })
     dispatch({ type: 'SET_MEMBERS', members: [] })
     dispatch({ type: 'SET_BALANCES', balances: [] })
     await handleLoadHome(res.data.id)
     setNewHomeName('')
+  }
+
+  // ---- create demo home ----
+  const handleCreateDemo = async () => {
+    setFormError('')
+    setLoadingHome(true)
+    const homeRes = await apiFetch<{ id: string; name: string }>('POST', '/api/homes', {
+      body: { name: 'Demo Flat 4B' },
+    })
+    if (!homeRes.ok) {
+      setLoadingHome(false)
+      setFormError(homeRes.message)
+      return
+    }
+    const hid = homeRes.data.id
+    saveHomeToHistory(hid, 'Demo Flat 4B')
+
+    // Add members: Asha, Ben, Chitra
+    const membersList: Member[] = []
+    for (const name of ['Asha', 'Ben', 'Chitra']) {
+      const mRes = await apiFetch<Member>('POST', `/api/homes/${hid}/members`, {
+        body: { name },
+      })
+      if (mRes.ok) membersList.push(mRes.data)
+    }
+
+    // Add a bill: Wi-Fi ($35.00 = 3500 cents -> 1167, 1167, 1166)
+    const billsList: Bill[] = []
+    const billRes = await apiFetch<Bill>('POST', `/api/homes/${hid}/bills`, {
+      body: { title: 'Wi-Fi & Utilities', totalCents: 3500 },
+    })
+    if (billRes.ok) billsList.push(billRes.data)
+
+    const balRes = await apiFetch<{ balances: Balance[] }>('GET', `/api/homes/${hid}/balances`)
+
+    setLoadingHome(false)
+    setHomeIdInput(hid)
+    setActiveHome(hid)
+    dispatch({ type: 'SET_MEMBERS', members: membersList })
+    dispatch({ type: 'SET_BILLS', bills: billsList })
+    if (balRes.ok) dispatch({ type: 'SET_BALANCES', balances: balRes.data.balances })
   }
 
   // ---- load home ----
@@ -312,6 +376,42 @@ function App() {
                 disabled={loadingHome}
               >
                 {loadingHome ? '…' : 'Load Home'}
+              </button>
+            </div>
+
+            {savedHomes.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <span style={styles.meta}>Recent homes: </span>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                  {savedHomes.map((h) => (
+                    <button
+                      key={h.id}
+                      type="button"
+                      style={{
+                        padding: '3px 8px',
+                        background: '#e2e8f0',
+                        border: '1px solid #cbd5e1',
+                        borderRadius: 4,
+                        fontSize: 12,
+                        cursor: 'pointer',
+                      }}
+                      onClick={() => handleLoadHome(h.id)}
+                    >
+                      {h.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ marginTop: 16, borderTop: '1px dashed #e2e8f0', paddingTop: 12 }}>
+              <button
+                type="button"
+                style={{ ...styles.btn, background: '#8b5cf6', width: '100%' }}
+                onClick={handleCreateDemo}
+                disabled={loadingHome}
+              >
+                ✨ Quick Start: Create Demo Home (3 members + 1 bill)
               </button>
             </div>
           </>
